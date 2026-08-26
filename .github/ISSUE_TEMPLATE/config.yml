@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Upstream Sentrook (issues & PRs)
+    url: https://github.com/FirstDataUnion/Sentrook/issues
+    about: Open all bugs and feature requests on the Sentrook monorepo.
+  - name: Hermes plugin docs
+    url: https://github.com/FirstDataUnion/Sentrook/blob/main/integrations/hermes/README.md
+    about: Install, configure, and verify documentation.
