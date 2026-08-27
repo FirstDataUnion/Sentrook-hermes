@@ -1,5 +1,5 @@
 name: sentrook
-version: 0.1.0-beta.0
+version: 0.1.0-beta.1
 # v1: Hermes installers through at least 0.18.x–0.20.x cap install at
 # manifest_version 1 even when the runtime loader accepts 2 (upstream
 # installer/loader drift). We do not use v2-only fields — stay on 1 so
