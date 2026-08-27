@@ -1,6 +1,10 @@
 name: sentrook
 version: 0.1.0-beta.0
-manifest_version: 2
+# v1: Hermes installers through at least 0.18.x–0.20.x cap install at
+# manifest_version 1 even when the runtime loader accepts 2 (upstream
+# installer/loader drift). We do not use v2-only fields — stay on 1 so
+# `hermes plugins install` works on the Hermes floor we document.
+manifest_version: 1
 api_version: 1
 description: >
   Sentrook trajectory scanner (hosted HTTPS). Scans tool calls and can allow,

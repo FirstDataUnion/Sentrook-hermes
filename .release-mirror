@@ -1,5 +1,5 @@
 upstream_repo=FirstDataUnion/Sentrook
 upstream_path=integrations/hermes/plugin
-upstream_sha=4321a56226c65ae21dd6fe9c6138b7dcd5a99c32
+upstream_sha=ffd107e523467ea45c73bd4ef6749a2a7a6a114f
 plugin_version=0.1.0-beta.0
-promoted_at_utc=2026-08-27T12:56:45Z
+promoted_at_utc=2026-08-27T13:13:29Z
