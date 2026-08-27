@@ -1,2 +1,5 @@
-This repository is populated by CI from FirstDataUnion/Sentrook
-(integrations/hermes/plugin). The initial commit contains documentation only.
+upstream_repo=FirstDataUnion/Sentrook
+upstream_path=integrations/hermes/plugin
+upstream_sha=4321a56226c65ae21dd6fe9c6138b7dcd5a99c32
+plugin_version=0.1.0-beta.0
+promoted_at_utc=2026-08-27T12:56:45Z

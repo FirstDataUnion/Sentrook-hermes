@@ -1,0 +1,4 @@
+# Sentrook Hermes plugin (installable directory)
+
+Light self-contained twin of the OpenClaw plugin — no runtime dependency on
+the full ``sentrook`` package. Scanner stays hosted.
