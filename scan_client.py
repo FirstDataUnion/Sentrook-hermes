@@ -13,7 +13,12 @@ from typing import Any, Literal
 from .auth import ScanAuthConfig, build_scan_auth_headers
 from .planir import PlanIR, last_pending_step, planir_to_dict
 from .sanitize import maybe_sanitize_planir
-from .scan_error_policy import ScanFailure, parse_retry_after_seconds
+from .scan_error_policy import (
+    ScanFailure,
+    is_scan_failure,
+    parse_retry_after_seconds,
+    scan_auth_error_to_failure,
+)
 
 logger = logging.getLogger("sentrook")
 
@@ -122,13 +127,40 @@ def _http_request(
         raise OSError(str(exc.reason)) from exc
 
 
-def _parse_scan_response(payload: bytes) -> ScanResponse:
-    doc = json.loads(payload.decode("utf-8"))
-    decision = doc.get("decision", "allow")
+def _parse_scan_response(payload: bytes) -> ScanResponse | ScanFailure:
+    """Parse a 200 ``/scan`` body. Unknown or missing decisions fail closed."""
+    try:
+        doc = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return ScanFailure(
+            ok=False,
+            kind="http",
+            status=200,
+            detail=f"invalid scan JSON: {exc}",
+        )
+    if not isinstance(doc, dict):
+        return ScanFailure(
+            ok=False,
+            kind="http",
+            status=200,
+            detail="scan response is not an object",
+        )
+    raw = doc.get("decision")
+    decision = raw.strip().lower() if isinstance(raw, str) else None
+    block = bool(doc.get("block"))
     if decision not in ("allow", "review", "block"):
-        decision = "allow"
+        if block:
+            decision = "block"
+        else:
+            shown = raw if raw is not None else "missing"
+            return ScanFailure(
+                ok=False,
+                kind="http",
+                status=200,
+                detail=f"unknown scan decision: {shown}",
+            )
     return ScanResponse(
-        block=bool(doc.get("block")),
+        block=block,
         decision=decision,
         risk=doc.get("risk"),
         summary=doc.get("summary"),
@@ -157,8 +189,6 @@ def post_scan(
     sanitize_ms = sanitized.sanitize_ms
 
     timeout_sec = max(0.001, timeout_ms / 1000.0)
-    started = time.perf_counter()
-    deadline = started + timeout_sec
     retried_429 = False
     body = json.dumps(outbound).encode("utf-8")
 
@@ -168,15 +198,12 @@ def post_scan(
     try:
         headers = build_scan_auth_headers(auth, timeout=30.0)
     except Exception as exc:
-        detail = str(exc)
-        logger.warning("scan auth failed: %s", detail[:200])
-        status_hint = 401 if "401" in detail or "unauthorized" in detail.lower() else None
-        return ScanFailure(
-            ok=False,
-            kind="http" if status_hint else "network",
-            status=status_hint,
-            detail=detail[:200] or "scan auth failed",
-        )
+        failure = scan_auth_error_to_failure(exc)
+        logger.warning("scan auth failed: %s", failure.detail)
+        return failure
+
+    started = time.perf_counter()
+    deadline = started + timeout_sec
 
     while True:
         try:
@@ -194,15 +221,18 @@ def post_scan(
             return ScanFailure(ok=False, kind="network", detail=msg)
 
         if status == 200:
-            scan = _parse_scan_response(payload)
+            parsed = _parse_scan_response(payload)
+            if is_scan_failure(parsed):
+                logger.warning("scan HTTP 200: %s", parsed.detail)
+                return parsed
             plugin_e2e_ms = int(round((time.perf_counter() - started) * 1000))
             timing = build_scan_timing(
-                scan,
+                parsed,
                 plugin_e2e_ms,
                 sanitize_enabled=True,
                 sanitize_ms=sanitize_ms,
             )
-            return PostScanResult(scan=scan, timing=timing)
+            return PostScanResult(scan=parsed, timing=timing)
 
         detail = payload.decode("utf-8", errors="replace")[:200]
 
@@ -322,7 +352,9 @@ def post_latency(
         pass
 
 
-def get_health(url: str, auth: ScanAuthConfig | None = None, timeout_sec: float = 5.0) -> tuple[bool, str]:
+def get_health(
+    url: str, auth: ScanAuthConfig | None = None, timeout_sec: float = 5.0
+) -> tuple[bool, str]:
     auth = auth or ScanAuthConfig(api_key=None, oidc=None)
     try:
         headers = build_scan_auth_headers(auth, timeout=timeout_sec)

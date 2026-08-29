@@ -1,4 +1,4 @@
-"""Sentrook Hermes plugin — hosted scan loop (Phase 2)."""
+"""Sentrook Hermes plugin — hosted scan loop."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from .intent import (
     resolve_session_platform,
 )
 from .planir import SnapshotCall, build_planir_snapshot, last_pending_step, planir_to_dict
-from .review_copy import build_review_message
+from .review_copy import build_review_message, pending_display_command
 from .rule_key import build_rule_key, build_scan_error_rule_key
 from .scan_client import (
     PostScanResult,
@@ -55,10 +55,7 @@ class SessionState:
 
 def _session_id(**kwargs: Any) -> str:
     return str(
-        kwargs.get("session_id")
-        or kwargs.get("task_id")
-        or kwargs.get("session_key")
-        or "default"
+        kwargs.get("session_id") or kwargs.get("task_id") or kwargs.get("session_key") or "default"
     )
 
 
@@ -126,6 +123,47 @@ def _directive_to_dict(directive: Any) -> dict[str, Any]:
     return out
 
 
+def _remember_pending(
+    st: SessionState,
+    tool_call_id: Any,
+    tool_name: str,
+    args: dict[str, Any],
+) -> None:
+    if tool_call_id:
+        st.pending[str(tool_call_id)] = {"tool": tool_name, "args": args or {}}
+
+
+def _drop_session_pending(session_id: Any, tool_call_id: Any) -> None:
+    if not session_id or not tool_call_id:
+        return
+    st = _sessions.get(str(session_id))
+    if st is not None:
+        st.pending.pop(str(tool_call_id), None)
+
+
+def _stash_review_pending(
+    rule_key: str,
+    *,
+    plan,
+    log: dict[str, Any] | None,
+    pending_args: dict[str, Any],
+    session_id: str,
+    tool_call_id: Any,
+    scan_error: bool = False,
+) -> None:
+    _pending_by_rule_key[rule_key] = {
+        "plan": planir_to_dict(plan),
+        "log": log,
+        "pending_args": pending_args,
+        "session_id": session_id,
+        "tool_call_id": str(tool_call_id) if tool_call_id else None,
+        "scan_error": scan_error,
+    }
+
+
+PLUGIN_ERROR_BLOCK = "Sentrook plugin error; this tool was not scanned or run."
+
+
 def _translate_scan_response(
     scan_result: PostScanResult,
     *,
@@ -133,6 +171,8 @@ def _translate_scan_response(
     pending_args: dict[str, Any],
     unattended: bool,
     platform: str | None = None,
+    session_id: str | None = None,
+    tool_call_id: Any = None,
 ) -> dict[str, Any] | None:
     scan = scan_result.scan
     if scan.block or scan.decision == "block":
@@ -152,7 +192,8 @@ def _translate_scan_response(
             )
             return {
                 "action": "block",
-                "message": scan.summary or "Sentrook flagged this tool call for review (unattended)",
+                "message": scan.summary
+                or "Sentrook flagged this tool call for review (unattended)",
             }
 
         pending = last_pending_step(plan)
@@ -164,11 +205,14 @@ def _translate_scan_response(
             scan_summary=scan.summary,
             scan_description=scan.review_description,
         )
-        _pending_by_rule_key[rule_key] = {
-            "plan": planir_to_dict(plan),
-            "log": scan.log,
-            "pending_args": pending_args,
-        }
+        _stash_review_pending(
+            rule_key,
+            plan=plan,
+            log=scan.log if isinstance(scan.log, dict) else None,
+            pending_args=pending_args,
+            session_id=session_id or "",
+            tool_call_id=tool_call_id,
+        )
         return {"action": "approve", "message": message, "rule_key": rule_key}
 
     return None
@@ -194,9 +238,6 @@ def _format_scan_timing_log(plan, scan_result: PostScanResult) -> str:
             "sanitize_ms": timing.sanitize_ms,
         }
     )
-
-
-
 
 
 def on_pre_llm_call(**kwargs: Any) -> None:
@@ -259,9 +300,6 @@ def on_pre_tool_call(tool_name: str, args: dict, **kwargs: Any) -> dict | None:
             batch_size=len(co_pending) + 1 if co_pending else None,
         )
 
-        if tool_call_id:
-            st.pending[str(tool_call_id)] = {"tool": tool_name, "args": args or {}}
-
         # Re-resolve auth each call so ~/.hermes/.env edits apply without restart.
         live_auth = resolve_scan_auth_config({}, env)
         scan_result = post_scan(config.url, config.timeout_ms, plan, live_auth)
@@ -273,7 +311,11 @@ def on_pre_tool_call(tool_name: str, args: dict, **kwargs: Any) -> dict | None:
                 (scan_result.detail or "")[:160],
                 config.url,
             )
-            rule_key = build_scan_error_rule_key(scan_result.kind)
+            rule_key = build_scan_error_rule_key(
+                scan_result.kind,
+                tool=tool_name,
+                pending_args=args or {},
+            )
             directive = scan_error_to_directive(
                 scan_result,
                 on_scan_error=config.on_scan_error,
@@ -285,28 +327,43 @@ def on_pre_tool_call(tool_name: str, args: dict, **kwargs: Any) -> dict | None:
                     "scan error (%s); continuing without scan (onScanError=allow)",
                     scan_result.kind,
                 )
+                _remember_pending(st, tool_call_id, tool_name, args or {})
                 return None
+            mapped = _directive_to_dict(directive)
             if directive.action == "approve":
-                _pending_by_rule_key[rule_key] = {
-                    "plan": planir_to_dict(plan),
-                    "log": None,
-                    "pending_args": args or {},
-                    "scan_error": True,
-                }
-            return _directive_to_dict(directive)
+                _remember_pending(st, tool_call_id, tool_name, args or {})
+                _stash_review_pending(
+                    rule_key,
+                    plan=plan,
+                    log=None,
+                    pending_args=args or {},
+                    session_id=sid,
+                    tool_call_id=tool_call_id,
+                    scan_error=True,
+                )
+            return mapped
 
         logger.info(_format_scan_timing_log(plan, scan_result))
         post_latency(config.url, live_auth, plan, scan_result.scan, scan_result.timing)
-        return _translate_scan_response(
+        mapped = _translate_scan_response(
             scan_result,
             plan=plan,
             pending_args=args or {},
             unattended=unattended,
             platform=platform,
+            session_id=sid,
+            tool_call_id=tool_call_id,
         )
+        if mapped is None or mapped.get("action") == "approve":
+            _remember_pending(st, tool_call_id, tool_name, args or {})
+        return mapped
     except Exception as exc:
         logger.warning("pre_tool_call failed: %s", exc)
-        return None
+        detail = str(exc).replace("\n", " ").strip()[:160]
+        message = PLUGIN_ERROR_BLOCK
+        if detail:
+            message = f"{PLUGIN_ERROR_BLOCK} Detail: {detail}"
+        return {"action": "block", "message": message}
 
 
 def on_post_tool_call(tool_name: str, args: dict, result: str = "", **kwargs: Any) -> None:
@@ -321,9 +378,7 @@ def on_post_tool_call(tool_name: str, args: dict, result: str = "", **kwargs: An
 
         tool = call["tool"]
         call_args = call.get("args") or {}
-        command = None
-        if tool in ("exec", "terminal"):
-            command = str(call_args.get("command") or call_args.get("cmd") or "") or None
+        command = pending_display_command(call_args)
 
         st.executed.append(
             SnapshotCall(
@@ -354,6 +409,8 @@ def on_post_approval_response(**kwargs: Any) -> None:
         rule_key or None,
         bool(pending),
     )
+    if pending and resolution in ("deny", "timeout", "cancelled"):
+        _drop_session_pending(pending.get("session_id"), pending.get("tool_call_id"))
     if not pending or not resolution:
         return
     try:
@@ -385,6 +442,9 @@ def on_post_approval_response(**kwargs: Any) -> None:
 def on_session_finalize(**kwargs: Any) -> None:
     sid = _session_id(**kwargs)
     _sessions.pop(sid, None)
+    stale = [key for key, value in _pending_by_rule_key.items() if value.get("session_id") == sid]
+    for key in stale:
+        _pending_by_rule_key.pop(key, None)
 
 
 def on_session_reset(**kwargs: Any) -> None:
@@ -415,6 +475,13 @@ def on_subagent_start(**kwargs: Any) -> None:
 
 def register(ctx: Any) -> None:
     global _plugin_config
+    settings = _get_settings_from_ctx(ctx)
+    try:
+        _plugin_config = resolve_plugin_config(settings)
+    except ValueError as exc:
+        logger.error("sentrook plugin config invalid: %s — using defaults", exc)
+        _plugin_config = resolve_plugin_config({})
+
     ctx.register_hook("pre_llm_call", on_pre_llm_call)
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
     ctx.register_hook("post_tool_call", on_post_tool_call)
@@ -423,14 +490,6 @@ def register(ctx: Any) -> None:
     ctx.register_hook("on_session_reset", on_session_reset)
     ctx.register_hook("subagent_start", on_subagent_start)
     cli.register_cli(ctx)
-
-    settings = _get_settings_from_ctx(ctx)
-    try:
-        _plugin_config = resolve_plugin_config(settings)
-    except ValueError as exc:
-        logger.error("sentrook plugin config invalid: %s", exc)
-        _plugin_config = None
-        return
 
     if url_requires_scan_auth(_plugin_config.url) and not has_scan_credentials(_plugin_config.auth):
         logger.warning(

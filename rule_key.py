@@ -52,12 +52,28 @@ def build_rule_key(
             return f"{RULE_KEY_PREFIX}:exec:{digest}"
 
     canonical = canonicalize_tool_args(tool, args)
-    fingerprint = json.dumps({"tool": tool, "args": canonical}, sort_keys=True, separators=(",", ":"))
+    fingerprint = json.dumps(
+        {"tool": tool, "args": canonical}, sort_keys=True, separators=(",", ":")
+    )
     digest = _sha256_hex(fingerprint)[:DIGEST_HEX_CHARS]
     kind = tool if tool else "tool"
     return f"{RULE_KEY_PREFIX}:{kind}:{digest}"
 
 
-def build_scan_error_rule_key(failure_kind: str) -> str:
-    digest = _sha256_hex(failure_kind)[:DIGEST_HEX_CHARS]
+def build_scan_error_rule_key(
+    failure_kind: str,
+    *,
+    tool: str | None = None,
+    pending_args: dict[str, Any] | None = None,
+) -> str:
+    """Fingerprint failure kind plus the pending tool so Always Allow cannot
+    skip later timeouts of unrelated commands.
+    """
+    canonical = canonicalize_tool_args(tool or "", pending_args or {})
+    fingerprint = json.dumps(
+        {"kind": failure_kind, "tool": tool or "", "args": canonical},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = _sha256_hex(fingerprint)[:DIGEST_HEX_CHARS]
     return f"{RULE_KEY_PREFIX}:scan_error:{digest}"

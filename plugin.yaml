@@ -1,5 +1,5 @@
 name: sentrook
-version: 0.1.0-beta.1
+version: 0.1.0-beta.3
 # v1: Hermes installers through at least 0.18.x–0.20.x cap install at
 # manifest_version 1 even when the runtime loader accepts 2 (upstream
 # installer/loader drift). We do not use v2-only fields — stay on 1 so
@@ -31,17 +31,18 @@ config_schema:
     type: int
     default: 60000
     description: >
-      Scan request timeout in ms. Gates the agent while awaiting /scan.
-      Default 60000 to absorb cold-start / quiet-host warmup. Env override:
-      SENTROOK_SCAN_TIMEOUT_MS.
+      Wait for POST /scan in ms (OIDC mint is a separate 30s budget).
+      Default 60000. Env override: SENTROOK_SCAN_TIMEOUT_MS.
   on_scan_error:
     type: str
     default: review
     description: >
-      When /scan times out, cannot connect, returns 5xx, is rate-limited, or
-      auth fails (401/403). allow | deny | review. Default review (escalate).
+      When /scan times out, cannot connect, returns 5xx, is rate-limited,
+      auth fails (401/403), or a 200 body has invalid JSON / a missing or
+      unknown decision. allow | deny | review. Default review (escalate).
       Auth never fail-opens: allow still blocks on 401/403. Unattended
-      cron/subagent still blocks. Env: SENTROOK_ON_SCAN_ERROR.
+      cron/subagent still blocks. Unexpected plugin errors always block.
+      Env: SENTROOK_ON_SCAN_ERROR.
   feedback_mode:
     type: str
     default: submit

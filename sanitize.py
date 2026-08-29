@@ -67,38 +67,58 @@ class SanitizeRules:
             re.IGNORECASE,
         )
     )
-    secret_value_patterns: tuple[re.Pattern[str], ...] = (
-        re.compile(
-            r"(?<![-_])\b(api[_-]?key|password|secret)\b(?!\s*=)|bearer\s+[A-Za-z0-9._=-]+",
-            re.IGNORECASE,
+    secret_value_patterns: tuple[tuple[re.Pattern[str], bool], ...] = (
+        (
+            re.compile(
+                r"(?<![-_])\b(api[_-]?key|password|secret)\b(?!\s*=)",
+                re.IGNORECASE,
+            ),
+            False,
         ),
-        re.compile(
-            r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{8,}|"
-            r"sk-[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}|sk-[a-z0-9]{10,}"
+        (re.compile(r"(bearer\s+)[A-Za-z0-9._=-]+", re.IGNORECASE), True),
+        (
+            re.compile(
+                r"(sk-(?:proj|svcacct|admin|live)-)[A-Za-z0-9_-]{8,}|"
+                r"(sk-)[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}|(sk-)[a-z0-9]{10,}"
+            ),
+            True,
         ),
-        re.compile(r"sk-ant-[a-z0-9-]{10,}"),
-        re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"),
-        re.compile(r"glpat-[A-Za-z0-9_-]{20,}"),
-        re.compile(
-            r"xox[baprs]-[A-Za-z0-9-]{10,}|xoxe(?:\.xox[bp])?-\d-[A-Za-z0-9]+|xapp-\d-[A-Za-z0-9-]+",
-            re.IGNORECASE,
+        (re.compile(r"(sk-ant-)[a-z0-9-]{10,}"), True),
+        (re.compile(r"(gh[pousr]_)[A-Za-z0-9]{20,}|(github_pat_)[A-Za-z0-9_]{20,}"), True),
+        (re.compile(r"(glpat-)[A-Za-z0-9_-]{20,}"), True),
+        (
+            re.compile(
+                r"(xox[baprs]-)[A-Za-z0-9-]{10,}|(xoxe(?:\.xox[bp])?-\d-)[A-Za-z0-9]+|(xapp-\d-)[A-Za-z0-9-]+",
+                re.IGNORECASE,
+            ),
+            True,
         ),
-        re.compile(r"https://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/_-]+"),
-        re.compile(r"[MNO][A-Za-z0-9_-]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{25,110}"),
-        re.compile(
-            r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/(?:\d+|\[REDACTED\])/[A-Za-z0-9_-]+"
+        (
+            re.compile(
+                r"(https://hooks\.slack\.com/(?:services|workflows|triggers)/)[A-Za-z0-9+/_-]+"
+            ),
+            True,
         ),
-        re.compile(r"\b\d{5,16}:A[A-Za-z0-9_-]{34}\b"),
-        re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
-        re.compile(r"\bSK[0-9a-fA-F]{32}\b"),
-        re.compile(r"\bEAA[A-Za-z0-9]{40,}\b"),
-        re.compile(r"(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}"),
-        re.compile(r"AIza[0-9A-Za-z_-]{35}"),
-        re.compile(r"(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}"),
-        re.compile(r"hf_[A-Za-z0-9]{20,}"),
-        re.compile(r"gsk_[A-Za-z0-9]{20,}"),
-        re.compile(
-            r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"
+        (re.compile(r"[MNO][A-Za-z0-9_-]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{25,110}"), False),
+        (
+            re.compile(
+                r"(https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/)"
+                r"(?:\d+|\[REDACTED\])/[A-Za-z0-9_-]+"
+            ),
+            True,
+        ),
+        (re.compile(r"\b\d{5,16}:A[A-Za-z0-9_-]{34}\b"), False),
+        (re.compile(r"\b(npm_)[A-Za-z0-9]{36}\b"), True),
+        (re.compile(r"\b(SK)[0-9a-fA-F]{32}\b"), True),
+        (re.compile(r"\b(EAA)[A-Za-z0-9]{40,}\b"), True),
+        (re.compile(r"((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA))[A-Z0-9]{16}"), True),
+        (re.compile(r"(AIza)[0-9A-Za-z_-]{35}"), True),
+        (re.compile(r"((?:sk|rk)_(?:live|test)_)[A-Za-z0-9]{20,}"), True),
+        (re.compile(r"(hf_)[A-Za-z0-9]{20,}"), True),
+        (re.compile(r"(gsk_)[A-Za-z0-9]{20,}"), True),
+        (
+            re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"),
+            False,
         ),
     )
     pii_patterns: tuple[re.Pattern[str], ...] = (
@@ -343,10 +363,30 @@ def _apply_patterns(text: str, patterns: tuple[re.Pattern[str], ...], replacemen
     return out
 
 
+def _apply_secret_value_patterns(
+    text: str,
+    patterns: tuple[tuple[re.Pattern[str], bool], ...],
+    placeholder: str,
+) -> str:
+    out = text
+    for pattern, keep_prefix in patterns:
+
+        def repl(match: re.Match[str], *, keep: bool = keep_prefix) -> str:
+            if keep:
+                for index in range(1, (match.lastindex or 0) + 1):
+                    group = match.group(index)
+                    if group:
+                        return f"{group}{placeholder}"
+            return placeholder
+
+        out = pattern.sub(repl, out)
+    return out
+
+
 def _apply_secret_patterns(text: str, rules: SanitizeRules) -> str:
     cleaned = _redact_env_secret_assignments(text, rules.redacted)
     cleaned = _redact_cli_secret_flags(cleaned, rules.redacted)
-    return _apply_patterns(cleaned, rules.secret_value_patterns, rules.redacted)
+    return _apply_secret_value_patterns(cleaned, rules.secret_value_patterns, rules.redacted)
 
 
 def scrub_secrets(text: str, rules: SanitizeRules = DEFAULT_RULES) -> str:
@@ -404,7 +444,9 @@ def _sanitize_value(
         ]
     if isinstance(value, dict):
         nested_pii = pii or (parent_key is not None and parent_key.lower() == "env")
-        return _sanitize_mapping(value, rules, pii=nested_pii, max_chars=max_chars, pii_keys=pii_keys)
+        return _sanitize_mapping(
+            value, rules, pii=nested_pii, max_chars=max_chars, pii_keys=pii_keys
+        )
     return value
 
 
@@ -517,11 +559,7 @@ def sanitize_planir_dict(
 
     steps = data.get("steps")
     if isinstance(steps, list):
-        data["steps"] = [
-            _sanitize_step(item, rules)
-            for item in steps
-            if isinstance(item, dict)
-        ]
+        data["steps"] = [_sanitize_step(item, rules) for item in steps if isinstance(item, dict)]
 
     return data
 

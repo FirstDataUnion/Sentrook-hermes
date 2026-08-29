@@ -98,8 +98,8 @@ def cmd_configure(args: argparse.Namespace, ctx: Any | None = None) -> int:
         {
             CLIENT_ID_VAR: answers.client_id,
             CLIENT_SECRET_VAR: answers.client_secret,
-            # Pin issuer to the Identity env that matches this plugin build's
-            # SCAN_BASE_URL (prod vs *dev*). Override later if needed.
+            # Pin issuer to the Identity host that matches this plugin's
+            # SCAN_BASE_URL. Override later only if you rebuilt with a different pair.
             OIDC_ISSUER_VAR: DEFAULT_OIDC_ISSUER,
         },
     )
@@ -231,14 +231,18 @@ def _parse_contribute(raw: Any, default: bool = DEFAULT_CONTRIBUTE_CORPUS) -> bo
     return default
 
 
-def _collect_configure_answers(args: argparse.Namespace, *, interactive: bool) -> ConfigureAnswers | None:
+def _collect_configure_answers(
+    args: argparse.Namespace, *, interactive: bool
+) -> ConfigureAnswers | None:
     client_id = (getattr(args, "client_id", None) or os.environ.get(CLIENT_ID_VAR, "")).strip()
     client_secret = (
         getattr(args, "client_secret", None) or os.environ.get(CLIENT_SECRET_VAR, "")
     ).strip()
 
     timeout_ms = getattr(args, "timeout_ms", None)
-    timeout_ms = timeout_ms if isinstance(timeout_ms, int) and timeout_ms > 0 else DEFAULT_TIMEOUT_MS
+    timeout_ms = (
+        timeout_ms if isinstance(timeout_ms, int) and timeout_ms > 0 else DEFAULT_TIMEOUT_MS
+    )
 
     on_scan_error_raw = getattr(args, "on_scan_error", None) or os.environ.get(
         "SENTROOK_ON_SCAN_ERROR", ""
@@ -261,11 +265,9 @@ def _collect_configure_answers(args: argparse.Namespace, *, interactive: bool) -
             print("    To use the hosted Sentrook instance, you need a free FIDU membership")
             print("    with a Sentrook OAuth client.")
             print("")
-            print(f"    Visit {DEFAULT_OIDC_ISSUER} , and log in or create an")
+            print(f"    Visit {DEFAULT_OIDC_ISSUER} and log in or create an")
             print("    account (free membership is all that's required).")
-            print("    Use the Identity environment that matches this Sentrook build")
-            print("    (prod Identity for prod Sentrook; *dev* Identity for *dev* Sentrook).")
-            print("    On your dashboard, click the Sentrook tab")
+            print("    On your dashboard, click the Sentrook tab.")
             print("    Click 'Create Credentials'")
             print("    Paste the client_id and client_secret when prompted below.")
             client_id = _prompt_text("OAuth client_id")
@@ -286,7 +288,9 @@ def _collect_configure_answers(args: argparse.Namespace, *, interactive: bool) -
             print("==> Community corpus")
             print("    When you allow or deny a Sentrook review, a sanitized trajectory")
             print("    example can be submitted to the community corpus, making the tool")
-            print("    more useful for everyone. Humans still approve before anything is published.")
+            print(
+                "    more useful for everyone. Humans still approve before anything is published."
+            )
             print("    Secrets/PII are redacted and submissions are completely anonymous; ")
             print("    you can change this later in config.yaml.")
             contribute_corpus = _prompt_confirm(

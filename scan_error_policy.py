@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -55,6 +56,24 @@ def is_scan_failure(value: Any) -> bool:
 
 def is_auth_failure(failure: ScanFailure) -> bool:
     return failure.kind == "http" and failure.status in AUTH_STATUSES
+
+
+def scan_auth_error_to_failure(err: object) -> ScanFailure:
+    """Map OIDC mint / discovery errors to a scan failure."""
+    detail = str(err).replace("\n", " ").strip()[:200]
+    lower = detail.lower()
+    status_match = re.search(r"\bHTTP (\d{3})\b", detail, flags=re.IGNORECASE)
+    status = int(status_match.group(1)) if status_match else None
+    if (status in AUTH_STATUSES) or "unauthorized" in lower:
+        return ScanFailure(
+            ok=False,
+            kind="http",
+            status=status if status in AUTH_STATUSES else 401,
+            detail=detail or "scan auth failed",
+        )
+    if "timed out" in lower or "timeout" in lower or "abort" in lower:
+        return ScanFailure(ok=False, kind="timeout", detail=detail or "scan auth timed out")
+    return ScanFailure(ok=False, kind="network", detail=detail or "scan auth failed")
 
 
 def _detail_snippet(failure: ScanFailure, limit: int = 100) -> str:
