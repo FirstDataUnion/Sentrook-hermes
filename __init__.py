@@ -16,6 +16,13 @@ from .auth import (
     url_requires_scan_auth,
 )
 from .config import PluginConfig, config_summary, resolve_plugin_config
+from .dev_log import (
+    append_dev_log,
+    build_scan_dev_event,
+    build_scan_error_dev_event,
+    resolve_dev_log_config,
+    scrub_dev_text,
+)
 from .intent import (
     RunIntent,
     extract_prompt_text,
@@ -328,6 +335,15 @@ def on_pre_tool_call(tool_name: str, args: dict, **kwargs: Any) -> dict | None:
                     scan_result.kind,
                 )
                 _remember_pending(st, tool_call_id, tool_name, args or {})
+                append_dev_log(
+                    resolve_dev_log_config(env),
+                    build_scan_error_dev_event(
+                        plan=plan,
+                        pending_args=args or {},
+                        failure=scan_result,
+                        mapped=None,
+                    ),
+                )
                 return None
             mapped = _directive_to_dict(directive)
             if directive.action == "approve":
@@ -341,6 +357,15 @@ def on_pre_tool_call(tool_name: str, args: dict, **kwargs: Any) -> dict | None:
                     tool_call_id=tool_call_id,
                     scan_error=True,
                 )
+            append_dev_log(
+                resolve_dev_log_config(env),
+                build_scan_error_dev_event(
+                    plan=plan,
+                    pending_args=args or {},
+                    failure=scan_result,
+                    mapped=mapped,
+                ),
+            )
             return mapped
 
         logger.info(_format_scan_timing_log(plan, scan_result))
@@ -354,6 +379,16 @@ def on_pre_tool_call(tool_name: str, args: dict, **kwargs: Any) -> dict | None:
             session_id=sid,
             tool_call_id=tool_call_id,
         )
+        append_dev_log(
+            resolve_dev_log_config(env),
+            build_scan_dev_event(
+                plan=plan,
+                pending_args=args or {},
+                scan=scan_result.scan,
+                timing=scan_result.timing,
+                mapped=mapped,
+            ),
+        )
         if mapped is None or mapped.get("action") == "approve":
             _remember_pending(st, tool_call_id, tool_name, args or {})
         return mapped
@@ -363,6 +398,15 @@ def on_pre_tool_call(tool_name: str, args: dict, **kwargs: Any) -> dict | None:
         message = PLUGIN_ERROR_BLOCK
         if detail:
             message = f"{PLUGIN_ERROR_BLOCK} Detail: {detail}"
+        append_dev_log(
+            resolve_dev_log_config(env_with_hermes_dotenv()),
+            {
+                "event": "plugin_error",
+                "tool": tool_name,
+                "tool_call_id": kwargs.get("tool_call_id"),
+                "detail": detail,
+            },
+        )
         return {"action": "block", "message": message}
 
 
@@ -391,6 +435,23 @@ def on_post_tool_call(tool_name: str, args: dict, result: str = "", **kwargs: An
         )
         if len(st.executed) > MAX_TRAJECTORY:
             del st.executed[: len(st.executed) - MAX_TRAJECTORY]
+        result_text = _result_to_text(result, kwargs.get("error"))
+        append_dev_log(
+            resolve_dev_log_config(env_with_hermes_dotenv()),
+            {
+                "event": "action",
+                "session_id": sid,
+                "run_id": kwargs.get("run_id") or kwargs.get("agent_run_id"),
+                "tool_call_id": str(tool_call_id) if tool_call_id else None,
+                "tool": tool,
+                "command": scrub_dev_text(command) if command else None,
+                "result_ok": not kwargs.get("error"),
+                "result_chars": len(result_text),
+                "error": (
+                    scrub_dev_text(str(kwargs.get("error")), 200) if kwargs.get("error") else None
+                ),
+            },
+        )
     except Exception as exc:
         logger.warning("post_tool_call failed: %s", exc)
 
@@ -408,6 +469,18 @@ def on_post_approval_response(**kwargs: Any) -> None:
         resolution,
         rule_key or None,
         bool(pending),
+    )
+    append_dev_log(
+        resolve_dev_log_config(env_with_hermes_dotenv()),
+        {
+            "event": "resolution",
+            "session_id": (pending or {}).get("session_id"),
+            "tool_call_id": (pending or {}).get("tool_call_id"),
+            "rule_key": rule_key or None,
+            "choice": choice or None,
+            "decision": resolution,
+            "pending": bool(pending),
+        },
     )
     if pending and resolution in ("deny", "timeout", "cancelled"):
         _drop_session_pending(pending.get("session_id"), pending.get("tool_call_id"))
@@ -496,6 +569,11 @@ def register(ctx: Any) -> None:
             "hosted scan URL has no credentials — run: hermes sentrook configure "
             "(or set SENTROOK_SCAN_CLIENT_ID + SENTROOK_SCAN_CLIENT_SECRET in ~/.hermes/.env)"
         )
+
+    boot_dev_log = resolve_dev_log_config(env_with_hermes_dotenv())
+    if boot_dev_log.enabled:
+        logger.info("diagnostic log %s", boot_dev_log.path)
+        append_dev_log(boot_dev_log, {"event": "register", "path": str(boot_dev_log.path)})
 
     logger.info(
         "sentrook plugin registered (%s, min_hermes=0.18.2)",

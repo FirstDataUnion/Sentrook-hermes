@@ -188,10 +188,7 @@ def _strip_rule_id_lines(text: str) -> str:
 
 def _likely_line(scan_description: str | None, pending_tool: str) -> str:
     first = (scan_description or "").split("\n")[0].strip() if scan_description else ""
-    if (
-        first.lower().startswith("likely:")
-        and TRUNCATED_TOKEN not in first
-    ):
+    if first.lower().startswith("likely:") and TRUNCATED_TOKEN not in first:
         return first
     if pending_tool in EXEC_TOOLS:
         return "Likely: run a shell command"
@@ -237,9 +234,7 @@ def build_review_message(
                 description = body
                 break
             overflow = len(body) - max_len
-            excerpt = pack_signal_excerpt(
-                scrubbed, max(budget - overflow - 3, MIN_COMMAND_CHARS)
-            )
+            excerpt = pack_signal_excerpt(scrubbed, max(budget - overflow - 3, MIN_COMMAND_CHARS))
             body = _assemble(likely, prefix, excerpt, with_hint=with_hint)
             if len(body) <= max_len:
                 description = body
@@ -254,9 +249,7 @@ def build_review_message(
             body = _strip_rule_id_lines(candidate.strip())
             if not body:
                 continue
-            if not body.lower().startswith("sentrook") and not body.lower().startswith(
-                "likely:"
-            ):
+            if not body.lower().startswith("sentrook") and not body.lower().startswith("likely:"):
                 body = f"Sentrook: {body}"
             return _clip(body, max_len)
 
@@ -264,3 +257,19 @@ def build_review_message(
         scan_summary or "Sentrook flagged this tool call for human review",
         max_len,
     )
+
+
+def review_copy_source(
+    *,
+    pending_args: dict[str, Any] | None = None,
+    scan_summary: str | None = None,
+    scan_description: str | None = None,
+) -> tuple[str, bool]:
+    """Where Hermes Reason copy came from: local_argv, sidecar, or fallback."""
+    if pending_display_command(pending_args):
+        return "local_argv", True
+    for candidate in (scan_description, scan_summary):
+        if isinstance(candidate, str) and candidate.strip():
+            if _strip_rule_id_lines(candidate.strip()):
+                return "sidecar", False
+    return "fallback", False

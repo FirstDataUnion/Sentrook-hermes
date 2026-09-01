@@ -1,5 +1,10 @@
 # sentrook (Hermes plugin)
 
+## 0.1.1-rc.1
+
+- Internal: optional local JSONL diagnostic log for maintainers investigating
+  review-card copy and scan decisions (off by default).
+
 ## 0.1.0-beta.3
 
 - Keep provider prefixes when redacting secrets (`sk-ant-[REDACTED]`,
